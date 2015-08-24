@@ -36,11 +36,13 @@
 
 // state machine status values
 
-enum PLANT_STATE { INITIALIZING,         // board powers on -- all lights lit, no controls active
-		   ACTIVE,               // plant displays signals based on turnout position, checks for plant unlock
-		   NEEDS_SETTING,        // 
-		   CHANGING, TIMEWAIT 
-                 };
+enum PLANT_STATE {
+    INITIALIZING,               // board powers on -- all lights lit, no controls active
+    ACTIVE,                     // plant displays signals based on turnout position, checks for plant unlock
+    NEEDS_SETTING,              // the plant signals must be changed to reflect turnout position
+    CHANGING,                   // the plant is all stop, in order to allow switch changes to be made
+    TIMEWAIT                    // no changes can be made while in this state
+};
 
 PLANT_STATE currentState = INITIALIZING;
 
@@ -159,6 +161,7 @@ IOLine *manual_switch = new Pin(8, INPUT_PULLUP);
 
 
 int pin[] = { 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, A0, A1, A2, A3, A4, A5 };
+
 #define PIN_COUNT (sizeof(pin)/sizeof(pin[0]))
 
 
@@ -308,20 +311,20 @@ void changeState(PLANT_STATE newState)
         break;
     case ACTIVE:
         if (newState == CHANGING) {
-	    currentState = CHANGING;
+            currentState = CHANGING;
             set_all_stop();
         }
         break;
     case NEEDS_SETTING:
-	if (newState == ACTIVE) {
-	    currentState = ACTIVE;
-	}
-	break;
+        if (newState == ACTIVE) {
+            currentState = ACTIVE;
+        }
+        break;
     }
 }
 
 
-void check_master_lock() 
+void check_master_lock()
 {
     bool changed = inputs[LOCK_MASTER].update();
 
@@ -422,7 +425,7 @@ void check_points(bool force)
     }
 
     if (force) {
-	changeState (ACTIVE);
+        changeState(ACTIVE);
     }
 
 }
@@ -451,7 +454,7 @@ void loop()
         check_initial_timer();
         break;
     case CHANGING:
-	check_master_lock();
+        check_master_lock();
         check_inputs();
         break;
     case TIMEWAIT:
@@ -459,10 +462,10 @@ void loop()
         check_timewait_timer();
         break;
     case NEEDS_SETTING:
-	check_points(true);
-	break;
+        check_points(true);
+        break;
     case ACTIVE:
-	check_master_lock();
+        check_master_lock();
         check_points(false);
         break;
     }
