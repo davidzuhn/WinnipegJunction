@@ -1,14 +1,46 @@
+/* Winnipeg Junction
+ *
+ * This package implements the interlocking plant for 
+ * Winnipeg Junction on Joe Binish's Central of Minnesota
+ * layout.
+ *
+ * It's designed for a cpShield and an IOX32 expansion board.
+ * 
+ * No external communication is needed -- this is a standalone
+ * program.
+ *
+ * Copyright 2015 by david d zuhn <zoo@whitepineroute.org>
+ *
+ * This work is licensed under the Creative Commons Attribution-ShareAlike
+ * 4.0 International License. To view a copy of this license, visit
+ * http://creativecommons.org/licenses/by-sa/4.0/deed.en_US.
+ *
+ * You may use this work for any purposes, provided that you make your
+ * version available to anyone else.  
+ */
+
 #include <Metro.h>
 
-#include "Wire.h"
-#include "MCP23017.h"
-#include "IOLine.h"
+#include <Wire.h>
+#include <MCP23017.h>
+#include <IOLine.h>
 #include <SignalHead2.h>
 
+/* number of seconds that all lights are on once power is applied, in seconds */
 #define INITIAL_TIME 15
+
+/* number of seconds that the plant will remain in STOP until the signals are displayed
+   to match the position of the turnouts, in seconds */
 #define TIMEWAIT_TIME 4
 
-enum PLANT_STATE { INITIALIZING, ACTIVE, CHANGING, TIMEWAIT };
+
+// state machine status values
+
+enum PLANT_STATE { INITIALIZING,         // board powers on -- all lights lit, no controls active
+		   ACTIVE,               // plant displays signals based on turnout position, checks for plant unlock
+		   NEEDS_SETTING,        // 
+		   CHANGING, TIMEWAIT 
+                 };
 
 PLANT_STATE currentState = INITIALIZING;
 
@@ -123,44 +155,60 @@ SignalHead2 *mast[] = {
 #define MAST_COUNT NELEMENTS(mast)
 
 
-IOLine *manual_unlocker = new Pin(8, INPUT_PULLUP);
+IOLine *manual_switch = new Pin(8, INPUT_PULLUP);
 
 
 int pin[] = { 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, A0, A1, A2, A3, A4, A5 };
-
 #define PIN_COUNT (sizeof(pin)/sizeof(pin[0]))
 
 
 
+/*
+ * configure all of the I/O lines used by this sketch
+ *
+ * Input lines are configured as such
+ * Output lines are as well
+ *
+ * Lights are all LIT UP as a demonstration / test indication
+ *
+ */
+
 void initialize_iolines()
 {
+    // shut off all of the arduino local pins 
     for (int i = 0; i < PIN_COUNT; i++) {
         pinMode(pin[i], OUTPUT);
-        digitalWrite(p[i], OFF);
+        digitalWrite(pin[i], LOW);
     }
 
-
+    // for each turnout, we have an output and an input line
     for (int i = 0; i < TURNOUT_COUNT; i++) {
         turnout_out[i]->init();
         turnout_read[i]->init();
     }
 
+    // 4 levers -- one for each of three switches, plus the master plant lock lever
     for (int i = 0; i < LEVER_COUNT; i++) {
         lever[i]->init();
     }
 
+    // 5 dwarf signals -- light 'em up
     for (int i = 0; i < DWARF_COUNT; i++) {
         dwarf[i]->init();
         dwarf[i]->setIndication(SignalHead2::LIT_UP_LIKE_THE_SUN);
     }
 
+    // 3 masts (each with 2 heads -- light 'em all up
     for (int i = 0; i < MAST_COUNT; i++) {
         mast[i]->init();
         mast[i]->setIndication(SignalHead2::LIT_UP_LIKE_THE_SUN);
     }
 
-    manual_unlocker->init();
+    // one key switch for the industry turnout
+    manual_switch->init();
 
+    // An IOBounce is configured for each of the levers and 
+    // the manual switch control
     for (int i = 0; i < INPUT_COUNT; i++) {
         inputs[i] = IOBounce();
     }
@@ -171,11 +219,14 @@ void initialize_iolines()
     inputs[LOCK1].attach(lock[0]);
     inputs[LOCK2].attach(lock[1]);
     inputs[LOCK3].attach(lock[2]);
+
     inputs[LOCK_MASTER].attach(lock[3]);
 
-    inputs[MANUAL_SWITCH].attach(manual_unlocker);
+    inputs[MANUAL_SWITCH].attach(manual_switch);
 
 
+    // and 4 bounce detectors are set up for the
+    // turnout position indicators
     for (int i = 0; i < TURNOUT_COUNT; i++) {
         points[i] = IOBounce();
         points[i].attach(turnout_read[i]);
@@ -209,14 +260,14 @@ void setup()
 void check_initial_timer()
 {
     if (initializingTimer.check()) {
-        changeState(ACTIVE);
+        changeState(NEEDS_SETTING);
     }
 }
 
 void check_timewait_timer()
 {
     if (timewaitTimer.check()) {
-        changeState(ACTIVE);
+        changeState(NEEDS_SETTING);
     }
 }
 
@@ -239,7 +290,7 @@ void changeState(PLANT_STATE newState)
 {
     switch (currentState) {
     case INITIALIZING:
-        if (newState == ACTIVE) {
+        if (newState == NEEDS_SETTING) {
             currentState = newState;
             return;
         }
@@ -251,23 +302,41 @@ void changeState(PLANT_STATE newState)
         }
         break;
     case TIMEWAIT:
-        if (newState == ACTIVE) {
-            currentState = ACTIVE;
+        if (newState == NEEDS_SETTING) {
+            currentState = NEEDS_SETTING;
         }
         break;
     case ACTIVE:
         if (newState == CHANGING) {
+	    currentState = CHANGING;
             set_all_stop();
         }
         break;
+    case NEEDS_SETTING:
+	if (newState == ACTIVE) {
+	    currentState = ACTIVE;
+	}
+	break;
     }
 }
 
 
+void check_master_lock() 
+{
+    bool changed = inputs[LOCK_MASTER].update();
+
+    if (changed) {
+        if (inputs[LOCK_MASTER].read() == 0) {
+            changeState(TIMEWAIT);
+        } else {
+            changeState(CHANGING);
+        }
+    }
+}
+
 void check_inputs()
 {
     bool changed[INPUT_COUNT];
-
 
     // first, update the bounce state on every input we're looking at
     for (int i = 0; i < INPUT_COUNT; i++) {
@@ -279,20 +348,6 @@ void check_inputs()
         turnout_out[T2]->digitalWrite(inputs[MANUAL_SWITCH].read());
     }
     // next, check the tower levers....
-
-
-    // check the state of the master lock lever
-
-    if (changed[LOCK_MASTER]) {
-        // if the master lever is changed, we need to do something with it
-        //   if it's closed, we're done making plant changes and must wait for signals (TIMEWAIT)
-        //   if it's open (pulled), we're going to make changes to the plant state
-        if (inputs[LOCK_MASTER].read() == 0) {
-            changeState(TIMEWAIT);
-        } else {
-            changeState(CHANGING);
-        }
-    }
 
     if (changed[LEVER1] && currentState == CHANGING) {
         // off = normal, on=pulled
@@ -318,7 +373,7 @@ void check_inputs()
 }
 
 
-void check_points()
+void check_points(bool force)
 {
     bool changed = false;
 
@@ -329,7 +384,7 @@ void check_points()
     }
 
     // configure all of the signals every time ANY turnout changes
-    if (changed) {
+    if (force || changed) {
         bool t1normal = points[T1].read();
         bool t2normal = points[T2].read();
         bool t3normal = points[T3].read();
@@ -365,8 +420,26 @@ void check_points()
                                   || (t3normal
                                       && t2normal) ? SignalHead2::PROCEED : SignalHead2::STOP);
     }
+
+    if (force) {
+	changeState (ACTIVE);
+    }
+
 }
 
+
+
+
+
+/*
+ * perform the long running work of the sketch 
+ *
+ * this is a non-blocking implememtation, so we have to check and see
+ * what mode we're in now (currentState).
+ *
+ * based on the mode, we do something
+ *
+ */
 
 
 void loop()
@@ -378,14 +451,19 @@ void loop()
         check_initial_timer();
         break;
     case CHANGING:
+	check_master_lock();
         check_inputs();
         break;
     case TIMEWAIT:
         // nothing can occur during timewait
         check_timewait_timer();
         break;
+    case NEEDS_SETTING:
+	check_points(true);
+	break;
     case ACTIVE:
-        check_points();
+	check_master_lock();
+        check_points(false);
         break;
     }
 }
