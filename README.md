@@ -1,2 +1,5 @@
-# WinnipegJunction
-Arduino sketch for C of MN Winnipeg Junction interlocking plant
+# Winnipeg Junction
+
+Arduino sketch for Central of MN Winnipeg Junction interlocking plant
+
+
