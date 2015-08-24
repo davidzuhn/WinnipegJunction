@@ -52,18 +52,23 @@ Metro initializingTimer(15 * 1000);
 
 Metro timewaitTimer(5 * 1000);
 
+// ----------------------------------------
+// start of I/O definitions
 
+// index into turnout_* arrays
 #define T1             0
 #define T2             1
 #define T3             2
 #define T4             3
 
+// index into dwarf array
 #define D1             0
 #define D2             1
 #define D3             2
 #define D4             3
 #define D5             4
 
+// index into input array
 #define LEVER1         0
 #define LEVER2         1
 #define LEVER3         2
@@ -73,12 +78,20 @@ Metro timewaitTimer(5 * 1000);
 #define LOCK_MASTER    6
 #define MANUAL_SWITCH  7
 
+// index into mast array
+#define S1_U           0
+#define S1_L           1
+#define S2_U           2
+#define S2_L           3
+#define S3_U           4
+#define S3_L           5
+
 
 IOLine *turnout_out[] = {
     new IOX(0x21, 1, 2, OUTPUT),        // T_OUT_1
     new IOX(0x21, 1, 3, OUTPUT),        // T_OUT_2
     new IOX(0x21, 1, 4, OUTPUT),        // T_OUT_3
-    new IOX(0x21, 1, 5, OUTPUT) // T_OUT_4
+    new IOX(0x21, 1, 5, OUTPUT),        // T_OUT_4
 };
 
 IOLine *turnout_read[] = {
@@ -88,9 +101,8 @@ IOLine *turnout_read[] = {
     new Pin(12, INPUT_PULLUP)   // T_IN_4
 };
 
-
-
 #define TURNOUT_COUNT NELEMENTS(turnout_out)
+
 
 IOLine *lever[] = {
     new Pin(1, INPUT_PULLUP),   // LEVER1
@@ -115,7 +127,7 @@ IOBounce points[TURNOUT_COUNT];
 #define INPUT_COUNT NELEMENTS(inputs)
 
 
-
+// D1-D5
 SignalHead2 *dwarf[] = {
     new SignalHead2(new IOX(0x21, 0, 0, OUTPUT),
                     new IOX(0x21, 0, 1, OUTPUT)),
@@ -130,13 +142,6 @@ SignalHead2 *dwarf[] = {
 };
 
 #define DWARF_COUNT NELEMENTS(dwarf)
-
-#define S1_U 0
-#define S1_L 1
-#define S2_U 2
-#define S2_L 3
-#define S3_U 4
-#define S3_L 5
 
 
 SignalHead2 *mast[] = {
@@ -164,6 +169,8 @@ int pin[] = { 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, A0, A1, A2, A3, A4, A5 };
 
 #define PIN_COUNT (sizeof(pin)/sizeof(pin[0]))
 
+// end of I/O definitions
+// ----------------------------------------
 
 
 /*
@@ -171,8 +178,6 @@ int pin[] = { 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, A0, A1, A2, A3, A4, A5 };
  *
  * Input lines are configured as such
  * Output lines are as well
- *
- * Lights are all LIT UP as a demonstration / test indication
  *
  */
 
@@ -237,28 +242,28 @@ void initialize_iolines()
 }
 
 
+/*
+ * Set the logical position of the turnout to match the physical position.
+ * This is used at power-on, to make sure we don't throw a switch that's
+ * under a train parked in the plant.
+ *
+ */
+
 void read_initial_turnout_position()
 {
     for (int i = 0; i < TURNOUT_COUNT; i++) {
         bool state = turnout_read[i]->digitalRead();
         turnout_out[i]->digitalWrite(state);
     }
-
 }
 
 
-
-void setup()
-{
-    currentState = INITIALIZING;
-
-    initialize_iolines();
-
-    read_initial_turnout_position();
-
-
-}
-
+/* loop function action for INITIALIZING state
+ * 
+ * all we do is wait for a fixed period of time
+ * and proceed to NEEDS_SETTING state
+ *
+ */
 
 void check_initial_timer()
 {
@@ -267,6 +272,15 @@ void check_initial_timer()
     }
 }
 
+
+/*
+ * loop function action for TIMEWAIT state
+ *
+ * wait for the timewait timer to expire
+ * and then proceed to NEEDS_SETTING state
+ *
+ */
+
 void check_timewait_timer()
 {
     if (timewaitTimer.check()) {
@@ -274,6 +288,12 @@ void check_timewait_timer()
     }
 }
 
+
+/*
+ * put every signal head in the plant to the maximal STOP indication
+ * that is R over R for a mast, R for a dwarf
+ *
+ */
 
 void set_all_stop()
 {
@@ -286,8 +306,12 @@ void set_all_stop()
 }
 
 
-
-
+/*
+ * implement the state machine 
+ * 
+ * only certain state transactions are permitted
+ *
+ */
 
 void changeState(PLANT_STATE newState)
 {
@@ -433,6 +457,18 @@ void check_points(bool force)
 
 
 
+/*
+ * Arduino initial function call
+ * 
+ */
+
+void setup()
+{
+    currentState = INITIALIZING;
+    initialize_iolines();
+    read_initial_turnout_position();
+}
+
 
 /*
  * perform the long running work of the sketch 
@@ -440,15 +476,14 @@ void check_points(bool force)
  * this is a non-blocking implememtation, so we have to check and see
  * what mode we're in now (currentState).
  *
- * based on the mode, we do something
+ * based on the mode, we do the right thing for that mode, which should
+ * always take a very small amount of time
  *
  */
 
 
 void loop()
 {
-    // put your main code here, to run repeatedly:
-
     switch (currentState) {
     case INITIALIZING:
         check_initial_timer();
